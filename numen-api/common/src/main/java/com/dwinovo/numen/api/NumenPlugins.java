@@ -7,6 +7,9 @@ import com.dwinovo.numen.api.entity.CompanionEvents;
 import com.dwinovo.numen.api.entity.NumenPlayer;
 import com.dwinovo.numen.api.entity.WaterState;
 import com.dwinovo.numen.api.event.NumenEvents;
+import com.dwinovo.numen.api.plugin.PluginRoster;
+import com.dwinovo.numen.api.plugin.PluginRoster.Source;
+import com.dwinovo.numen.api.plugin.PluginSwitches;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.ItemStack;
 
@@ -63,7 +66,65 @@ public final class NumenPlugins {
     public static void register(String namespace, NumenPlugin plugin) {
         if (plugin == null) return;
         com.dwinovo.numen.api.sdk.ApiRegistry.checkNamespace(namespace);
-        plugin.setup(new Impl(namespace));
+        ROSTER.run(namespace, plugin, new Impl(namespace));
+    }
+
+    /**
+     * 登记一个<b>目标模组只在客户端</b>的联动(Litematica 这一类纯客户端模组):函数全是客户端函数({@code ClientCall}),真正碰目标模组的代码
+     * 只在主人的客户端上跑。和 {@link #register} 一样登记,区别在"有没有"的判据:
+     * <ul>
+     *   <li><b>登记在两侧无条件</b>。服务端装不装目标模组都登记,所以你的登记({@code NumenPlugin#setup})与函数签名里<b>不许出现目标模组的类</b>——
+     *       服务端读签名、生成文档时会加载它们;碰目标模组的代码只放在函数体里被调用到的类里。</li>
+     *   <li><b>判据只有一处:主人的客户端。</b>客户端起来时问平台"{@code targetMod} 装了没有",装了就在报到时把 {@code namespace} 报给服务端
+     *       ({@link com.dwinovo.numen.api.plugin.ClientMods#provided}、{@code ClientCapsPayload})。服务端只读这份报告:主人的客户端没报,
+     *       模型的 API 清单、帮助与技能表里就没有这个名字空间,调用它当场以 {@code no_function} 失败、说明缺的是哪个模组。</li>
+     *   <li>主人换了客户端或中途装了目标模组,重新进服才刷新。</li>
+     * </ul>
+     * 目标模组<b>两侧都装</b>的联动(它的函数有服务端的、客户端只是读界面)用 {@link #register} 加你自己的"目标在不在"的闸门,不用这个。
+     *
+     * @param namespace 你的名字空间,规矩同 {@link #register}
+     * @param targetMod 目标模组的 id,问平台({@code Services.platform().modName})用
+     */
+    public static void registerForClientMod(String namespace, String targetMod, NumenPlugin plugin) {
+        com.dwinovo.numen.api.sdk.ApiRegistry.checkNamespace(namespace);
+        com.dwinovo.numen.api.plugin.ClientMods.declare(namespace, targetMod);
+        register(namespace, plugin);
+    }
+
+    /**
+     * 引擎自己的登记(帮助、原版指令、手上的活、模块那几组):引擎是宿主不是插件,不进花名册、停用名单也管不着。
+     * <b>Numen API 内部调用</b>。
+     */
+    public static void registerHost(NumenPlugin plugin) {
+        plugin.setup(new Impl(NUMEN));
+    }
+
+    /**
+     * 联动型插件在装之前报到,让花名册里有它的一行:{@code id} 是它之后 {@link #register} 用的名字空间,{@code targetMod}
+     * 是它联动的模组。<b>目标模组在场才报到</b>——不在场的联动不算这台服务器上的插件,不进花名册。返回能不能接着装:
+     * 服主在停用名单里关了它,就是 false,别再装。
+     *
+     * <p>Numen 内嵌的联动由 Numen 的闸门报到({@link Source#BUNDLED});单独发布的联动插件报 {@link Source#JAR}。
+     */
+    public static boolean admit(Source source, String id, String targetMod) {
+        return ROSTER.admit(source, id, targetMod);
+    }
+
+    /** 插件装到一半出了事(不是它的 setup 里抛的,比如装之前的准备):记进花名册,界面上显示原因。 */
+    public static void failed(String id, Throwable cause) {
+        ROSTER.failed(id, cause);
+    }
+
+    /** 这台服务器上的插件花名册:界面、停用名单都读写它。<b>Numen API 内部调用</b>。 */
+    public static PluginRoster roster() {
+        return ROSTER;
+    }
+
+    private static volatile PluginRoster ROSTER = new PluginRoster(PluginSwitches::onDisk, PluginRoster::platformMeta);
+
+    /** 单测用:单测里没有加载器给的配置目录,换一份名单不在服务器配置目录里的花名册。必须在第一次登记之前。 */
+    public static void useRoster(PluginRoster roster) {
+        ROSTER = roster;
     }
 
     /** 主人客户端那一侧的输入口,形状与 {@link NumenApi#emit(UUID, String, String)} 相同。 */

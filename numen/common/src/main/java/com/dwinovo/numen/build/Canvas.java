@@ -1,5 +1,6 @@
 package com.dwinovo.numen.build;
 
+import com.dwinovo.numen.api.sdk.LuaCodecs;
 import com.dwinovo.numen.task.build.BuildTaskRecord;
 import com.dwinovo.numen.api.permission.PlacedBlocks;
 import net.minecraft.core.BlockPos;
@@ -11,12 +12,6 @@ import java.util.Map;
  * 一串格要成的样子:每一格最终要成什么。后写覆盖先写——同一格写两次,留下后一笔。
  */
 public final class Canvas {
-
-    /**
-     * 一串格至多几格。一栋正常房子五千到八千格;生存模式的盘料只盘交来的这一串,拆成几串交就是墙砌好了才发现屋顶的料不够,所以
-     * 一栋房子要装得下。
-     */
-    public static final int MAX_CELLS = 16384;
 
     private final Map<Long, BuildTaskRecord.Target> cells = new LinkedHashMap<>();
 
@@ -31,14 +26,14 @@ public final class Canvas {
             cells.remove(other.asLong());
         }
         cells.put(target.pos().asLong(), target);
-        if (cells.size() > MAX_CELLS) {
-            throw new IllegalArgumentException("this comes to more than " + MAX_CELLS
+        if (cells.size() > LuaCodecs.MAX_CELLS) {
+            throw new IllegalArgumentException("this comes to more than " + LuaCodecs.MAX_CELLS
                     + " cells; build it as several pieces");
         }
     }
 
     /** 画完的每一格,按最后一次画它的先后,摆在它们自己的世界坐标上。 */
-    public Layout layout() {
-        return Layout.of(List.copyOf(cells.values()), 0);
+    public List<BuildTaskRecord.Target> targets() {
+        return List.copyOf(cells.values());
     }
 }

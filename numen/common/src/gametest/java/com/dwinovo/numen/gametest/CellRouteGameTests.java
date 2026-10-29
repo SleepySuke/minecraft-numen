@@ -5,7 +5,6 @@ import static com.dwinovo.numen.gametest.GameTestKit.*;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.dwinovo.numen.build.Built;
 import com.dwinovo.numen.api.entity.CompanionFactory;
 import com.dwinovo.numen.api.entity.NumenPlayer;
 import com.dwinovo.numen.api.permission.PlacedBlocks;
@@ -19,7 +18,7 @@ import net.minecraft.world.Difficulty;
 import net.minecraft.world.level.block.Blocks;
 
 /**
- * 去一串格:{@code numen.move.to} 给一串格(Cells)走进其中任意一格,给一串方块走到其中之一旁边,给距离停在离它们不远处;她自己盖的房子不用
+ * 去一串格:{@code numen.move.to} 给一串格(Cells)走进其中任意一格,给一串方块走到其中之一旁边,给距离停在离它们不远处;玩家放下的方块(放置记号)不用
  * 点名也不挖。格子由程序写出来,和她拿扫描结果原样交过去一样;都从脚本入口进。
  */
 public class CellRouteGameTests {
@@ -117,26 +116,22 @@ public class CellRouteGameTests {
     }
 
     /**
-     * 路上不挖她盖的房子:关在木板屋里,终点在屋东边;东墙是她照蓝图盖的一栋({@link Built} 记着这几格,放置记号也是她自己)。
-     * 不点名任何禁区,她也挖开别的墙绕出去,东墙一块不少——日式小屋卡在底层来回挖自己刚放下的格,
-     * 就是路线把房子的格当成了能挖的地形。
+     * 路上不挖放置记号的格:关在石屋里,终点在屋东边;东墙带着放置记号(她自己放的,和日式小屋卡在底层来回挖自己刚放下的格同一件事),
+     * 别的墙没有(石头是地形,她许挖)。不点名任何禁区,她挖开别的墙绕出去,东墙一块不少。
      */
     @GameTest(template = "floor16", timeoutTicks = 528, batch = BATCH)
-    public static void a_walk_never_digs_a_building_she_built(GameTestHelper helper) {
+    public static void a_walk_never_digs_what_a_player_placed(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
-        plankRoomAround(helper, 7, 7);
-        int planksBefore = plankCount(helper, 7, 7);
-        NumenPlayer companion = spawnAt(helper, "gametest_keeper", new BlockPos(7, 2, 7), false);
-        String her = companion.getGameProfile().getName();
-        Built.Site site = new Built.Site("gt_east_wall", level.dimension().location(),
-                helper.absolutePos(new BlockPos(9, 2, 5)), 0);
+        roomAround(helper, 7, 7, Blocks.STONE);
+        int wallBefore = roomCount(helper, 7, 7, Blocks.STONE);
+        NumenPlayer companion = spawnBare(helper, "gametest_keeper", new BlockPos(7, 2, 7), false);
         List<BlockPos> wall = new ArrayList<>();
         for (int y = 2; y <= 4; y++) {
             for (int z = 5; z <= 9; z++) {
                 BlockPos cell = helper.absolutePos(new BlockPos(9, y, z));
                 wall.add(cell);
-                Built.of(level.getServer()).placed(site, her, level.getGameTime(), cell, Blocks.OAK_PLANKS);
-                PlacedBlocks.of(level).record(cell, new PlacedBlocks.Placer(companion.getUUID(), her));
+                PlacedBlocks.of(level).record(cell, new PlacedBlocks.Placer(companion.getUUID(),
+                        companion.getGameProfile().getName()));
             }
         }
         BlockPos target = helper.absolutePos(new BlockPos(13, 2, 7));
@@ -147,11 +142,43 @@ public class CellRouteGameTests {
             helper.assertTrue(walk.succeeded() && companion.blockPosition().distSqr(target) <= 2,
                     "she did not get out: " + walk.outcome());
             for (BlockPos cell : wall) {
-                helper.assertTrue(level.getBlockState(cell).is(Blocks.OAK_PLANKS),
-                        "a plank of her building was broken at " + cell.toShortString() + ": " + walk.outcome());
+                helper.assertTrue(level.getBlockState(cell).is(Blocks.STONE),
+                        "a block a player placed was broken at " + cell.toShortString() + ": " + walk.outcome());
             }
-            helper.assertTrue(plankCount(helper, 7, 7) < planksBefore, "she got out without breaking any plank?");
-            wall.forEach(cell -> Built.of(level.getServer()).cleared(site, level.getGameTime(), cell));
+            helper.assertTrue(roomCount(helper, 7, 7, Blocks.STONE) < wallBefore, "she got out without breaking any block?");
+            CompanionFactory.despawn(level.getServer(), companion);
+        });
+    }
+
+    /**
+     * 别的玩家放下的一堵墙挡在去路上:{@code numen.move.to} 绕过去,不挖它。墙两格高、七格长,正好横在她和终点之间;
+     * 创造模式挖一块墙几乎不花时间,路线若把它当地形,一定直接挖穿——绕开靠的是放置记号,不是挖不动。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 400, batch = BATCH)
+    public static void a_walk_goes_round_a_wall_another_player_placed(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        NumenPlayer companion = spawnBare(helper, "gametest_goer", new BlockPos(8, 2, 3), true);
+        PlacedBlocks.Placer stranger = new PlacedBlocks.Placer(java.util.UUID.randomUUID(), "gametest_stranger");
+        List<BlockPos> wall = new ArrayList<>();
+        for (int x = 5; x <= 11; x++) {
+            for (int y = 2; y <= 3; y++) {
+                BlockPos cell = helper.absolutePos(new BlockPos(x, y, 8));
+                level.setBlockAndUpdate(cell, Blocks.STONE_BRICKS.defaultBlockState());
+                PlacedBlocks.of(level).record(cell, stranger);
+                wall.add(cell);
+            }
+        }
+        BlockPos target = helper.absolutePos(new BlockPos(8, 2, 13));
+        ToolRun walk = lua(companion, "numen.move.to(" + xyz(target) + ")");
+
+        succeedWhen(helper, () -> {
+            helper.assertTrue(walk.done(), "numen.move.to has not finished");
+            helper.assertTrue(walk.succeeded() && companion.blockPosition().distSqr(target) <= 2,
+                    "she did not get round the wall: " + walk.outcome());
+            for (BlockPos cell : wall) {
+                helper.assertTrue(level.getBlockState(cell).is(Blocks.STONE_BRICKS),
+                        "a block of the wall a player placed was dug at " + cell.toShortString() + ": " + walk.outcome());
+            }
             CompanionFactory.despawn(level.getServer(), companion);
         });
     }

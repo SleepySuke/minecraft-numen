@@ -476,6 +476,37 @@ public class ScriptGameTests {
     }
 
     /**
+     * 形状里要游戏在场才答得出的两件:图案的标签({@code ##logs} 是标签里每个方块的默认状态,{@code ##*oak_logs} 是它们的每一种状态)读自这个世界
+     * 加载好的数据包,{@code expand_vert} 把选区拉到这个维度的最低到最高一格。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 200, batch = "numen_scripts")
+    public static void shape_reads_the_worlds_tags_and_height(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        NumenPlayer her = spawnAt(helper, "gametest_shape_reader", new BlockPos(2, 2, 2), false);
+        ToolRun run = lua(her, """
+                local logs = numen.shape.pattern("##logs")[1].blocks
+                local oak = false
+                for _, b in ipairs(logs) do
+                  oak = oak or b == "minecraft:oak_log[axis=y]"
+                end
+                local tall = numen.shape.cuboid({x = 0, y = 64, z = 0}, {x = 1, y = 65, z = 1}):expand_vert():cells()
+                return {logs = #logs, oak = oak, oak_states = #numen.shape.pattern("##*oak_logs")[1].blocks,
+                        count = #tall, lowest = tall[1].y, highest = tall[#tall].y}
+                """);
+        helper.assertTrue(run.ranToTheEnd(), "the shape program failed: " + run.receipt());
+        var got = run.data().getAsJsonObject("returned");
+        helper.assertTrue(got.get("logs").getAsInt() >= 20 && got.get("oak").getAsBoolean(),
+                "##logs is every log of the tag, in its default state: " + got);
+        helper.assertTrue(got.get("oak_states").getAsInt() == 12, "##*oak_logs is 4 blocks of 3 axes: " + got);
+        int height = level.getMaxBuildHeight() - level.getMinBuildHeight();
+        helper.assertTrue(got.get("count").getAsInt() == 4 * height && got.get("lowest").getAsInt() == level.getMinBuildHeight()
+                        && got.get("highest").getAsInt() == level.getMaxBuildHeight() - 1,
+                "expand_vert reaches from the lowest to the highest block: " + got);
+        CompanionFactory.despawn(level.getServer(), her);
+        helper.succeed();
+    }
+
+    /**
      * 查到的东西原样交给动作:{@code numen.scan.blocks} 一团的最近一格、{@code numen.scan.block} 读到的一块,都直接进 {@code numen.work.dig};两格都挖掉,
      * 程序拿到的是两份数据({@code dug} 各一格),不是话。
      */
@@ -609,6 +640,25 @@ public class ScriptGameTests {
         }
     }
 
+    /** 夹具组 {@code gtcm.pad}:目标模组只在客户端的联动的函数,主人的客户端报了它才有。 */
+    public static final class PadFns {
+
+        private PadFns() {}
+
+        @Fn("Read the pad of the client-only mod.")
+        @Example("gtcm.pad.read()")
+        public static String read(ClientCall call) {
+            return "the pad";
+        }
+    }
+
+    static {
+        if (GameTestKit.numenTestsEnabled()) {
+            NumenPlugins.registerForClientMod("gtcm", "gametest_pad_mod", numen -> numen.api("pad",
+                    "Test fixture: a client-only mod's functions.", PadFns.class));
+        }
+    }
+
     /**
      * 程序里的客户端函数向主人的连接发 {@code ClientCallPayload}:主人的连接是 {@code OwnerLine}(没有客户端),这里扮他的客户端答
      * ({@code ClientEndpoint}),答复经上行的处理函数回到服务端。服务端从包进到包出的路——认主人、量大小、反向请求、答复——
@@ -646,6 +696,69 @@ public class ScriptGameTests {
                     helper.assertTrue(result.get().calls().size() == 2,
                             "the calls' outcomes did not come back: " + receipt);
                     leave(owner);
+                    CompanionFactory.despawn(helper.getLevel().getServer(), her);
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * 目标模组只在客户端的联动:主人的客户端报到时没报它,她调它当场以 {@code no_function} 失败、说明缺哪个模组,什么也没发给主人的客户端;
+     * 她的系统提示里也没有它。报了它之后,同一个调用走到主人的客户端,提示里也有了。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 200, batch = "numen_scripts")
+    public static void a_client_only_mods_functions_exist_for_her_only_when_the_owners_client_reports_it(
+            GameTestHelper helper) {
+        NumenPlayer her = spawnAt(helper, "gametest_padded", new BlockPos(2, 2, 2), false);
+        ServerPlayer owner = presentOwner(helper, her, "gametest_pad_owner");
+        // 她的主人以名册为准(和模块库、技能库一样):按真实流程把她记进名册
+        com.dwinovo.numen.api.entity.CompanionRegistry.get(helper.getLevel().getServer()).put(her.getUUID(),
+                new com.dwinovo.numen.api.entity.CompanionRegistry.Entry("gametest_padded", owner.getUUID(),
+                        net.minecraft.world.level.Level.OVERWORLD, her.blockPosition()));
+        com.dwinovo.numen.api.brain.Replies.hello(owner, com.dwinovo.numen.api.brain.Presence.PROTOCOL);
+        received(owner);
+        AtomicReference<Program.Outcome> refused = new AtomicReference<>();
+        AtomicReference<Program.Outcome> answered = new AtomicReference<>();
+        boolean[] sent = {false};
+
+        steps(helper)
+                .thenExecute(() -> {
+                    helper.assertFalse(com.dwinovo.numen.api.sdk.ApiDocs.index(Modules.of(her.getUUID())).contains("gtcm.pad"),
+                            "the index lists a client-only mod the owner's client did not report");
+                    ServerPrograms.run(her, her.getUUID(), owner.getUUID(), new ServerPrograms.Request(
+                            "padless-" + UUID.randomUUID(), "return pcall(gtcm.pad.read)", Modules.of(her.getUUID()), true),
+                            NetworkTransport.INSTANCE, CallObserver.NONE, refused::set);
+                })
+                .thenWaitUntil(() -> helper.assertTrue(refused.get() != null, "the refusal has not come back"))
+                .thenExecute(() -> {
+                    String receipt = refused.get().receipt();
+                    helper.assertTrue(receipt.contains("no_function") && receipt.contains("needs the gametest_pad_mod mod"),
+                            "the missing mod was not named: " + receipt);
+                    helper.assertTrue(received(owner).stream().noneMatch(p -> p instanceof ClientCallPayload),
+                            "a call for a mod the client lacks was sent to it");
+                    // 主人的客户端报了它(版本在先,能力在后,到齐才算报到)
+                    com.dwinovo.numen.api.brain.Replies.hello(owner, com.dwinovo.numen.api.brain.Presence.PROTOCOL,
+                            java.util.Set.of("gtcm"));
+                    received(owner);
+                    helper.assertTrue(com.dwinovo.numen.api.sdk.ApiDocs.index(Modules.of(her.getUUID())).contains("gtcm.pad"),
+                            "the index does not list a client-only mod the owner's client reported");
+                    ServerPrograms.run(her, her.getUUID(), owner.getUUID(), new ServerPrograms.Request(
+                            "padded-" + UUID.randomUUID(), "return gtcm.pad.read()", Modules.of(her.getUUID()), true),
+                            NetworkTransport.INSTANCE, CallObserver.NONE, answered::set);
+                })
+                .thenWaitUntil(() -> {
+                    for (CustomPacketPayload payload : received(owner)) {
+                        if (payload instanceof ClientCallPayload call) {
+                            sent[0] = true;
+                            ClientEndpoint.handle(call, answer -> ClientCallResultPayload.handle(answer, owner));
+                        }
+                    }
+                    helper.assertTrue(answered.get() != null, "the receipt has not come back");
+                })
+                .thenExecute(() -> {
+                    helper.assertTrue(sent[0] && answered.get().receipt().contains("returned: the pad"),
+                            "the call did not reach the owner's client: " + answered.get().receipt());
+                    leave(owner);
+                    com.dwinovo.numen.api.entity.CompanionRegistry.get(helper.getLevel().getServer()).remove(her.getUUID());
                     CompanionFactory.despawn(helper.getLevel().getServer(), her);
                 })
                 .thenSucceed();

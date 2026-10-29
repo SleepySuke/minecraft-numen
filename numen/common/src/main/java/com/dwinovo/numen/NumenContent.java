@@ -50,6 +50,8 @@ import com.dwinovo.numen.task.move.MoveToTaskRecord;
 public final class NumenContent {
 
     private static boolean initialised = false;
+    /** Numen 的内容这次启动装上了没有:停用名单关了它就是 false。各加载器入口挂钩子、登记包都问这一个答案。 */
+    private static boolean installed = false;
 
     /** Numen 在插件那扇门里的手柄(名字空间 {@code numen}),登记时拿到,运行中发事件用。 */
     private static volatile com.dwinovo.numen.api.NumenApi api;
@@ -65,9 +67,18 @@ public final class NumenContent {
 
     private NumenContent() {}
 
-    public static void init() {
-        if (initialised) return;
+    /**
+     * 装 Numen 的内容。返回装上了没有——服主在停用名单里关了 Numen 就不装,加载器入口随之不挂 Numen 的每刻钩子、不登记它的包。
+     */
+    public static boolean init() {
+        if (initialised) return installed;
         initialised = true;
+        // Numen 是插件之一:服主在停用名单里关了它,这次启动它的内容一样不装,引擎照常起来
+        if (!com.dwinovo.numen.api.NumenPlugins.admit(com.dwinovo.numen.api.plugin.PluginRoster.Source.BUNDLED,
+                com.dwinovo.numen.api.NumenPlugins.NUMEN, "")) {
+            Constants.LOG.info("[numen-content] switched off in the plugin list; not installed");
+            return false;
+        }
         registerTools();
         registerTaskRunners();
         // 原版四件甲是第一处穿戴来源,和模组的饰品栏走同一扇门;内嵌联动在这之后才开闸,所以原版排在最前
@@ -80,6 +91,8 @@ public final class NumenContent {
                 numen.command(com.dwinovo.numen.debug.PathCommands.verb()));
         Constants.LOG.info("[numen-content] registered {} tool(s), {} task type(s); survival chains enabled",
                 ToolRegistry.size(), TaskFactory.size());
+        installed = true;
+        return true;
     }
 
     /**
@@ -132,6 +145,7 @@ public final class NumenContent {
             com.dwinovo.numen.tools.work.MoveApi.install(numen);
             com.dwinovo.numen.tools.work.WorkApi.install(numen);
             com.dwinovo.numen.tools.work.BuildApi.install(numen);
+            com.dwinovo.numen.tools.shape.ShapeApi.install(numen);
             com.dwinovo.numen.tools.work.FightApi.install(numen);
             com.dwinovo.numen.tools.interact.UseApi.install(numen);
             com.dwinovo.numen.tools.interact.GuiApi.install(numen);

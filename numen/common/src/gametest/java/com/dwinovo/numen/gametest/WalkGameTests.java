@@ -45,9 +45,9 @@ public class WalkGameTests {
     @GameTest(template = "floor16", timeoutTicks = 486, batch = BATCH)
     public static void a_walk_out_of_a_closed_room_digs_its_way_and_says_so(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
-        plankRoomAround(helper, 7, 7);
-        int planksBefore = plankCount(helper, 7, 7);
-        NumenPlayer companion = spawnAt(helper, "gametest_keeper", new BlockPos(7, 2, 7), false);
+        roomAround(helper, 7, 7, Blocks.STONE);
+        int wallBefore = roomCount(helper, 7, 7, Blocks.STONE);
+        NumenPlayer companion = spawnBare(helper, "gametest_keeper", new BlockPos(7, 2, 7), false);
         BlockPos target = helper.absolutePos(OUTSIDE);
         ToolRun walk = lua(companion, "return numen.move.to(" + xyz(target) + ")");
 
@@ -55,13 +55,13 @@ public class WalkGameTests {
             helper.assertTrue(walk.done(), "move to has not finished");
             helper.assertTrue(walk.succeeded() && companion.blockPosition().distSqr(target) <= 2,
                     "she did not walk out: " + walk.outcome());
-            helper.assertTrue(walk.outcome().contains("En route") && walk.outcome().contains("oak_planks"),
+            helper.assertTrue(walk.outcome().contains("En route") && walk.outcome().contains("stone"),
                     "the reply does not say what was broken: " + walk.outcome());
-            int broken = planksBefore - plankCount(helper, 7, 7);
-            helper.assertTrue(broken > 0, "no plank was broken");
+            int broken = wallBefore - roomCount(helper, 7, 7, Blocks.STONE);
+            helper.assertTrue(broken > 0, "no block of the wall was broken");
             JsonObject account = returned(walk);
             helper.assertTrue(account.get("dug").getAsInt() == broken && account.get("distance_left").getAsDouble() < 2,
-                    "the account does not match the world (" + broken + " planks gone): " + account);
+                    "the account does not match the world (" + broken + " blocks gone): " + account);
             CompanionFactory.despawn(level.getServer(), companion);
         });
     }
@@ -85,7 +85,7 @@ public class WalkGameTests {
         for (int y = 2; y <= 3; y++) {
             level.setBlockAndUpdate(helper.absolutePos(new BlockPos(10, y, 7)), Blocks.DIRT.defaultBlockState());
         }
-        NumenPlayer companion = spawnAt(helper, "gametest_promiser", new BlockPos(3, 2, 7), false);
+        NumenPlayer companion = spawnBare(helper, "gametest_promiser", new BlockPos(3, 2, 7), false);
         BlockPos start = companion.blockPosition();
         BlockPos goal = helper.absolutePos(new BlockPos(12, 2, 7));
         ToolRun walk = lua(companion, "return numen.move.to(" + xyz(goal) + ")");
@@ -288,7 +288,7 @@ public class WalkGameTests {
         longFloor(helper);
         wallAcross(helper, 30, Blocks.DIRT);
         wallAcross(helper, 150, Blocks.STONE);
-        NumenPlayer companion = spawnAt(helper, "gametest_pioneer", new BlockPos(2, 1, 12), false);
+        NumenPlayer companion = spawnBare(helper, "gametest_pioneer", new BlockPos(2, 1, 12), false);
         BlockPos goal = helper.absolutePos(new BlockPos(210, 1, 12));
         ToolRun walk = lua(companion, "return numen.move.to(" + xyz(goal) + ")");
 
@@ -308,4 +308,81 @@ public class WalkGameTests {
             CompanionFactory.despawn(level.getServer(), companion);
         });
     }
+
+    /**
+     * 垫高上去再回到原处:够不着的高处靠一根垫柱上去(垫的料经 useItemOn 放下,放置记号照记),走到之后要回出发的地方。
+     * 记号让路线不挖自己垫的柱子——回程是不是还有路,看这条用例。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 900, batch = BATCH)
+    public static void a_walk_can_come_back_down_from_a_pillar_she_built(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos perch = helper.absolutePos(new BlockPos(8, 5, 8));
+        level.setBlockAndUpdate(perch.below(), Blocks.STONE.defaultBlockState());
+        NumenPlayer companion = spawnBare(helper, "gametest_climber", new BlockPos(2, 2, 2), false);
+        companion.getInventory().add(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COBBLESTONE, 32));
+        BlockPos home = companion.blockPosition();
+        ToolRun[] runs = {null, null};
+        int[] marked = {0};
+        steps(helper)
+                .thenExecute(() -> runs[0] = lua(companion, "return numen.move.to(" + xyz(perch) + ")"))
+                .thenWaitUntil(() -> helper.assertTrue(runs[0].done(), "the climb has not finished"))
+                .thenExecute(() -> {
+                    helper.assertTrue(runs[0].succeeded() && companion.blockPosition().distSqr(perch) <= 2,
+                            "she did not get up: " + runs[0].outcome());
+                    marked[0] = com.dwinovo.numen.api.permission.PlacedBlocks.of(level).size();
+                    helper.assertTrue(marked[0] > 0, "the pillar blocks she placed carry no placement marks");
+                    runs[1] = lua(companion, "return numen.move.to(" + xyz(home) + ")");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(runs[1].done(), "the way back has not finished (the cell at home carries a mark: "
+                        + marked[0] + ")"))
+                .thenExecute(() -> {
+                    helper.assertTrue(runs[1].succeeded() && companion.blockPosition().distSqr(home) <= 4,
+                            "she did not get back down (pillar blocks marked: " + marked[0] + "): " + runs[1].outcome());
+                    CompanionFactory.despawn(level.getServer(), companion);
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * 垫柱把自己的出口填满:她在一根三格高的基岩烟囱里(墙挖不动),只能垫柱子升上去、翻出去;出来之后要回烟囱底。垫的柱子是走路
+     * 顺手垫的路(放置记号是垫路),走路规则不禁挖它,回程拆自己的柱子下去,照常经权限层(她自己放的,放行)。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 900, batch = BATCH)
+    public static void a_walk_back_into_the_chimney_she_pillared_out_of(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        for (int y = 2; y <= 4; y++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx != 0 || dz != 0) {
+                        level.setBlockAndUpdate(helper.absolutePos(new BlockPos(8 + dx, y, 8 + dz)),
+                                Blocks.BEDROCK.defaultBlockState());
+                    }
+                }
+            }
+        }
+        NumenPlayer companion = spawnBare(helper, "gametest_chimney", new BlockPos(8, 2, 8), false);
+        companion.getInventory().add(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COBBLESTONE, 32));
+        BlockPos home = companion.blockPosition();
+        BlockPos outside = helper.absolutePos(new BlockPos(13, 2, 8));
+        ToolRun[] runs = {null, null};
+        steps(helper)
+                .thenExecute(() -> runs[0] = lua(companion, "return numen.move.to(" + xyz(outside) + ")"))
+                .thenWaitUntil(() -> helper.assertTrue(runs[0].done(), "the climb out has not finished"))
+                .thenExecute(() -> {
+                    helper.assertTrue(runs[0].succeeded() && companion.blockPosition().distSqr(outside) <= 2,
+                            "she did not get out: " + runs[0].outcome());
+                    var placed = com.dwinovo.numen.api.permission.PlacedBlocks.of(level);
+                    helper.assertTrue(placed.isPlaced(home, level.getBlockState(home)) && !placed.isBuilt(home.asLong()),
+                            "the pillar block she laid at home is not marked as laid path");
+                    runs[1] = lua(companion, "return numen.move.to(" + xyz(home) + ")");
+                })
+                .thenWaitUntil(() -> helper.assertTrue(runs[1].done(), "the way back has not finished"))
+                .thenExecute(() -> {
+                    helper.assertTrue(runs[1].succeeded() && companion.blockPosition().distSqr(home) <= 4,
+                            "she did not get back in: " + runs[1].outcome());
+                    CompanionFactory.despawn(level.getServer(), companion);
+                })
+                .thenSucceed();
+    }
+
 }

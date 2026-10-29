@@ -4,11 +4,11 @@ import com.dwinovo.numen.WorkProfile;
 import com.dwinovo.numen.nav.Feet;
 import com.dwinovo.numen.task.dig.DigTaskRecord;
 import com.dwinovo.numen.task.move.Destination;
+import com.dwinovo.numen.api.entity.Faces;
 import com.dwinovo.numen.api.entity.NumenPlayer;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
@@ -29,8 +29,10 @@ public final class BuildSurvey {
 
     /** 一格的情形。 */
     public enum State {
-        /** 已经是图纸要的样子(流体目标与排水不做,也算了结)。 */
+        /** 已经是图纸要的样子。 */
         DONE,
+        /** 涉及液体:要放水或岩浆、或要把现有的液体换成空气。她不放也排不掉,不去动,回执单列 {@code liquid}({@link BuildCellRules#leavesLiquid})。 */
+        LIQUID,
         /** 不去动:规则不许、玩家的东西、砸不动、出了边界。要问主人的不在这里,问了才知道。 */
         SKIPPED,
         /** 生存模式下立着别的方块,得先挖开。 */
@@ -38,10 +40,10 @@ public final class BuildSurvey {
         /** 生存模式下立着别的方块,身上却没有要放的料。 */
         SHORT,
         /**
-         * 走原生车道(像右键那样放,{@link BuildTaskRecord.Target#itemPlace})的格此刻放下去立不住(原版 {@code canSurvive}——物品
-         * 落位时问的就是它),而它相邻的设计格还有没盖好的:托着它的(下面那块、背后那面墙、上面挂着它的)还没有,等那一格好了它才是
-         * {@link #REACH} 或 {@link #FAR}。够不够得着都一样:走过去也放不下。照图直写的格不问这一句,立不立得住由建完之后的落定说;
-         * 相邻的都盖好了还立不住的也不在这里——图纸要的在那儿本来立不住,照常交给 {@code numen.build.place},它放不下就照实说。
+         * 素面格({@link BuildTaskRecord.Target#itemPlace})此刻放下去立不住(原版 {@code canSurvive}——物品落位时问的就是它),
+         * 而它相邻的设计格还有没盖好的:托着它的(下面那块、背后那面墙、上面挂着它的)还没有,等那一格好了它才是
+         * {@link #REACH} 或 {@link #FAR}。够不够得着都一样:走过去也放不下。带状态位的格不问这一句,立不立得住由放下之后原版说(回执的 {@code did_not_stay});
+         * 相邻的都盖好了还立不住的也不在这里——图纸要的在那儿本来立不住,照常交给 {@code numen.build.place},它直接写进去并如实计数。
          */
         UNHELD,
         /** 站在这里够得着,放得进去。 */
@@ -54,17 +56,15 @@ public final class BuildSurvey {
     private final BuildTaskRecord r;
     private final BuildCellRules rules;
     private final BuildInventory inv;
-    private final BuildLedger ledger;
     private final boolean instaBreak;
     /** 她此刻站的节点;悬在半空时为 null,什么都算够不着。 */
     private final Feet feet;
 
-    BuildSurvey(NumenPlayer player, BuildTaskRecord r, BuildCellRules rules, BuildInventory inv, BuildLedger ledger) {
+    BuildSurvey(NumenPlayer player, BuildTaskRecord r, BuildCellRules rules, BuildInventory inv) {
         this.player = player;
         this.r = r;
         this.rules = rules;
         this.inv = inv;
-        this.ledger = ledger;
         this.instaBreak = WorkProfile.of(player).instaBreak();
         this.feet = Feet.of(player);
     }
@@ -73,17 +73,18 @@ public final class BuildSurvey {
     public static BuildSurvey of(NumenPlayer player, BuildTaskRecord r) {
         BuildCellRules rules = new BuildCellRules(player, r);
         BuildInventory inv = new BuildInventory(player);
-        BuildLedger ledger = new BuildLedger(player, r, rules, inv, new BuildFixtures(player, r, inv));
-        return new BuildSurvey(player, r, rules, inv, ledger);
+        return new BuildSurvey(player, r, rules, inv);
     }
 
     /** 这一格此刻的情形。 */
     public State of(BuildTaskRecord.Target target) {
         BlockPos pos = target.pos();
         BlockState now = rules.peek(pos);
-        if (target.matches(now) || target.desiredState().getBlock() instanceof LiquidBlock
-                || (BuildCellRules.isAirTarget(target) && now.getBlock() instanceof LiquidBlock)) {
+        if (target.matches(now)) {
             return State.DONE;
+        }
+        if (BuildCellRules.leavesLiquid(target, now)) {
+            return State.LIQUID;
         }
         if (rules.refused(target) || rules.hopeless(target)) {
             return State.SKIPPED;
@@ -108,29 +109,23 @@ public final class BuildSurvey {
         return false;
     }
 
-    /** 站在这里够不够得着往这一格里放。 */
+    /**
+     * 站在这里够不够得着往这一格里放:就是走去放时的到达目标({@link Destination#reach})认不认这个站位——身体站得进、手够得着,
+     * 而且手点得着({@link Faces#handReachable},手放挑点击也问它)。走位挑停点与这里数格是同一句话。
+     */
     boolean reaches(BlockPos pos) {
-        return feet != null && feet.in(Destination.reach(player, pos));
+        return feet != null && feet.reaches(Destination.reach(player, pos), player.serverLevel());
     }
 
     /**
-     * 她此刻付不付得起这一格:不花料的格永远付得起;有料单的格单子上每样都在,否则身上够件数。施工逐格扣料前问的也是它。
+     * 她此刻付不付得起这一格:不花料的格永远付得起,否则身上够件数。施工逐格扣料前问的也是它。
      */
     boolean affordable(BuildTaskRecord.Target target) {
         int cost = r.consumeMaterials && rules.costsMaterial(target) ? target.materialCount() : 0;
         if (cost <= 0) {
             return true;
         }
-        var needs = ledger.needsFor(target);
-        if (needs.isEmpty()) {
-            return inv.hasItems(target.item(), cost, true);
-        }
-        for (BuildTaskRecord.CellNeed need : needs) {
-            if (inv.countMatching(need) < 1) {
-                return false;
-            }
-        }
-        return true;
+        return inv.hasItems(target.item(), cost);
     }
 
     /** 数一遍整份:每种情形几格,以及要挖的格(离她近的在前)与够不着的格(低的在前、同一层里近的在前)。 */
@@ -138,9 +133,17 @@ public final class BuildSurvey {
         Map<State, Integer> counts = new EnumMap<>(State.class);
         List<BlockPos> dig = new ArrayList<>();
         List<BlockPos> far = new ArrayList<>();
+        List<BuildTaskRecord.Target> pending = new ArrayList<>();
+        int heldWater = 0;
         for (BuildTaskRecord.Target target : r.targets) {
             State state = of(target);
             counts.merge(state, 1, Integer::sum);
+            if (state != State.DONE && state != State.SKIPPED && state != State.LIQUID) {
+                pending.add(target);
+            }
+            if (target.heldWater()) {
+                heldWater++;
+            }
             if (state == State.DIG) {
                 dig.add(target.pos());
             } else if (state == State.FAR) {
@@ -150,7 +153,7 @@ public final class BuildSurvey {
         BlockPos here = player.blockPosition();
         dig.sort(Comparator.comparingDouble(p -> p.distSqr(here)));
         far.sort(Comparator.<BlockPos>comparingInt(BlockPos::getY).thenComparingDouble(p -> p.distSqr(here)));
-        return new Tally(counts, dig, far);
+        return new Tally(counts, dig, far, pending, heldWater);
     }
 
     /**
@@ -158,8 +161,11 @@ public final class BuildSurvey {
      *
      * @param dig 要先挖开的格,离她近的在前
      * @param far 够不着的格,低的在前、同一层里离她近的在前:下面的先盖,上面的才有地方站
+     * @param pending 还没了结的格({@link #left()} 数的就是它们),按施工图里的先后
+     * @param heldWater 要的方块本来含着水、水被去掉了的格({@link BuildTaskRecord.Target#heldWater})
      */
-    public record Tally(Map<State, Integer> counts, List<BlockPos> dig, List<BlockPos> far) {
+    public record Tally(Map<State, Integer> counts, List<BlockPos> dig, List<BlockPos> far,
+                        List<BuildTaskRecord.Target> pending, int heldWater) {
 
         public int count(State state) {
             return counts.getOrDefault(state, 0);

@@ -279,38 +279,37 @@ public final class GameTestKit {
                 .takeEntries(System.currentTimeMillis(), 0L);
     }
 
-    /** 图纸夹具从测试结构目录拷进蓝图目录(幂等)。 */
-    static void copyCottageFixture(ServerLevel level) throws Exception {
-        java.nio.file.Path src = java.nio.file.Path.of(
-                StructureUtils.testStructuresDir, "japanese_cottage.litematic");
-        java.nio.file.Files.copy(src,
-                com.dwinovo.numen.blueprint.BlueprintStore.dir(level.getServer())
-                        .resolve("japanese_cottage.litematic"),
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-    }
-
     /** 一间 5×5、三格高、无顶的木板屋,她在屋里。生存、空手:垫不高,只能拆墙或不出去。 */
     static void plankRoomAround(GameTestHelper helper, int cx, int cz) {
+        roomAround(helper, cx, cz, Blocks.OAK_PLANKS);
+    }
+
+    /** 同样一间屋子,墙用 {@code wall}。 */
+    static void roomAround(GameTestHelper helper, int cx, int cz, net.minecraft.world.level.block.Block wall) {
         ServerLevel level = helper.getLevel();
         for (int x = cx - 2; x <= cx + 2; x++) {
             for (int z = cz - 2; z <= cz + 2; z++) {
                 boolean perimeter = x == cx - 2 || x == cx + 2 || z == cz - 2 || z == cz + 2;
                 if (!perimeter) continue;
                 for (int y = 2; y <= 4; y++) {
-                    level.setBlockAndUpdate(helper.absolutePos(new BlockPos(x, y, z)),
-                            Blocks.OAK_PLANKS.defaultBlockState());
+                    level.setBlockAndUpdate(helper.absolutePos(new BlockPos(x, y, z)), wall.defaultBlockState());
                 }
             }
         }
     }
 
     static int plankCount(GameTestHelper helper, int cx, int cz) {
+        return roomCount(helper, cx, cz, Blocks.OAK_PLANKS);
+    }
+
+    /** {@link #roomAround} 的墙还剩几块。 */
+    static int roomCount(GameTestHelper helper, int cx, int cz, net.minecraft.world.level.block.Block wall) {
         ServerLevel level = helper.getLevel();
         int n = 0;
         for (int x = cx - 2; x <= cx + 2; x++) {
             for (int z = cz - 2; z <= cz + 2; z++) {
                 for (int y = 2; y <= 4; y++) {
-                    if (level.getBlockState(helper.absolutePos(new BlockPos(x, y, z))).is(Blocks.OAK_PLANKS)) {
+                    if (level.getBlockState(helper.absolutePos(new BlockPos(x, y, z))).is(wall)) {
                         n++;
                     }
                 }
@@ -868,19 +867,12 @@ public final class GameTestKit {
     }
 
     /**
-     * 一件直接交执行器的建造活,不经脚本:测的是执行器本身(施工顺序、扣料、落定、续建)。按设计或蓝图施工、当场执行原语
-     * 从 {@code build} 的函数进来的,见 BuildGameTests 里经 {@link #lua} 调的那些。
+     * 一件直接交执行器的建造活,不经脚本:测的是执行器本身(施工顺序、扣料、落定)。当场执行原语从 {@code build} 的函数进来的,见
+     * BuildGameTests 里经 {@link #lua} 调的那些。
      */
     static com.dwinovo.numen.task.build.BuildTaskRecord buildJob(String callId, long deadline,
-            com.dwinovo.numen.build.Layout layout, boolean consume, boolean partial) {
-        return new com.dwinovo.numen.task.build.BuildTaskRecord("build", callId, deadline, layout, consume,
-                partial, null);
-    }
-
-    /** 只有方块的一件建造活,见 {@link #buildJob(String, long, com.dwinovo.numen.build.Layout, boolean, boolean)}。 */
-    static com.dwinovo.numen.task.build.BuildTaskRecord buildJob(String callId, long deadline,
-            List<com.dwinovo.numen.task.build.BuildTaskRecord.Target> targets, boolean consume, boolean partial) {
-        return buildJob(callId, deadline, com.dwinovo.numen.build.Layout.of(targets, 0), consume, partial);
+            List<com.dwinovo.numen.task.build.BuildTaskRecord.Target> targets, boolean consume) {
+        return new com.dwinovo.numen.task.build.BuildTaskRecord("build", callId, deadline, targets, consume);
     }
 
     /**
