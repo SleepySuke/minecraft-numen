@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import com.dwinovo.numen.pathing.api.Trace;
 import com.dwinovo.numen.pathing.body.Body;
 import com.dwinovo.numen.api.entity.BodyAction;
 import com.dwinovo.numen.api.entity.Controls;
@@ -43,12 +44,14 @@ final class Rig {
     final DiveLog dives = new DiveLog();
     /** 日志里的"谁"({@link PathLog#who})。 */
     final String who;
+    /** 宿主收"为什么"的那一头。 */
+    final Trace trace;
     /** 这一刻主线程上寻路用了多久。 */
     final TickTally tally = new TickTally();
     private final List<BodyAction> actions = new ArrayList<>();
     private LiveWorld world;
 
-    Rig(Body body, TerrainPolicy terrain, Materials materials, Threats threats) {
+    Rig(Body body, TerrainPolicy terrain, Materials materials, Threats threats, Trace trace) {
         this.body = body;
         this.entity = body.entity();
         this.keys = body.controls();
@@ -58,6 +61,7 @@ final class Rig {
         this.terrain = terrain;
         this.materials = materials;
         this.threats = threats;
+        this.trace = trace;
         this.who = PathLog.who(entity);
     }
 

@@ -22,6 +22,7 @@ import com.dwinovo.numen.api.agent.skill.SkillRegistry;
 import com.dwinovo.numen.api.library.LibraryHub;
 import com.dwinovo.numen.api.script.Modules;
 import com.dwinovo.numen.api.store.Io;
+import com.dwinovo.numen.api.store.StoreException;
 import com.dwinovo.numen.bench.report.EndReason;
 import com.dwinovo.numen.bench.report.FailureTag;
 import com.dwinovo.numen.bench.report.Pricing;
@@ -60,7 +61,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -130,6 +130,8 @@ final class Attempt {
     private final Fragments.Inbox fromServer = new Fragments.Inbox(Wire.TO_CLIENT);
 
     private Path home;
+    /** 她家里所有写的车道:与产品同一条,清理也排在它后面。 */
+    private Io io;
     private Transcript transcript;
     private Meter meter;
     private Mind mind;
@@ -188,7 +190,9 @@ final class Attempt {
         // 札记、会话日志、她的 Lua 模块与技能落在这次自己的临时目录里,收场整个删掉:每次都从白纸开始,模块与技能只用内置原版
         // (jar 同步下来的)、不读主人目录里的,评测也从不读它们
         home = Files.createTempDirectory("numen-bench-");
-        Io io = NumenIo.inline("numen-bench");
+        // 与产品同一条车道:服务端主线程只排队,写落在后台的串行执行器上。评测每刻都要问一次身体、
+        // 每轮都要记一条轨迹,同步直写在主线程上会把评测结果本身改掉
+        io = NumenIo.lanes().io("companion/" + her.getUUID());
         NoteBook.init(uuid -> new Home(home.resolve("memory"), io), () -> (int) (level.getDayTime() / 24000L));
         LibraryHub libraries = LibraryHub.headless(home.resolve("library"));
         UUID libraryOwner = owner.getUUID();
@@ -374,7 +378,10 @@ final class Attempt {
         }
         scenario.arena().clear(level, origin);
         if (home != null) {
-            deleteTree(home);
+            // 排在她那条车道的最后:前面还没写下去的写先落完,再删
+            Io lane = io;
+            Path root = home;
+            lane.write(() -> deleteTree(root));
         }
     }
 
@@ -384,7 +391,7 @@ final class Attempt {
                 Files.delete(p);
             }
         } catch (IOException e) {
-            throw new UncheckedIOException(e);
+            throw new StoreException("删不了评测的临时目录 " + root + ": " + e, e);
         }
     }
 

@@ -7,12 +7,16 @@ import com.dwinovo.numen.api.entity.NumenPlayer;
 import com.dwinovo.numen.pathing.api.Navigator;
 import com.dwinovo.numen.pathing.api.Ports;
 import com.dwinovo.numen.pathing.api.Snapshots;
+import com.dwinovo.numen.pathing.api.Trace;
 import com.dwinovo.numen.pathing.plan.CostModel;
 import com.dwinovo.numen.pathing.plan.Materials;
 import com.dwinovo.numen.pathing.plan.TerrainPolicy;
 import com.dwinovo.numen.pathing.plan.Threats;
 import com.dwinovo.numen.pathing.spec.RouteSpec;
 import com.dwinovo.numen.api.permission.Permission;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 
 import net.minecraft.world.item.Item;
 
@@ -36,7 +40,46 @@ public final class CompanionPorts {
     /** 她的寻路门面,避开 {@code threats},垫路从 {@code materials} 里挑。 */
     public static Navigator navigator(NumenPlayer player, Threats threats, List<Item> materials) {
         return Navigator.of(new CompanionBody(player), new Ports(terrain(player), materials(player, materials),
-                threats));
+                threats, pathTrail(player)));
+    }
+
+    /**
+     * 她的旁路轨迹,接成寻路的 {@link Trace}:走不下去的格子、重搜的理由、收场的诊断,与她每一轮看到的、
+     * 每一刻在哪写在同一个文件里。门面那一侧只给数据,落盘的形状在这里定。
+     */
+    private static Trace pathTrail(NumenPlayer player) {
+        return event -> com.dwinovo.numen.api.agent.trace.TraceRecorders.of(player.getUUID())
+                .ifPresent(trace -> trace.event("path", pathBody(event)));
+    }
+
+    /** 一条寻路的事写成轨迹里的一行:坐标写成数组,原因与诊断照它们给的类别名。 */
+    private static JsonObject pathBody(Trace.PathEvent event) {
+        JsonObject o = new JsonObject();
+        o.addProperty("kind", event.kind());
+        put(o, "from", event.from());
+        put(o, "to", event.to());
+        put(o, "at", event.at());
+        if (event.reason() != null) {
+            o.addProperty("reason", event.reason());
+        }
+        if (event.diagnosis() != null) {
+            o.addProperty("diagnosis", event.diagnosis());
+        }
+        if (event.detail() != null) {
+            o.addProperty("detail", event.detail());
+        }
+        return o;
+    }
+
+    private static void put(JsonObject o, String key, net.minecraft.world.phys.Vec3 v) {
+        if (v == null) {
+            return;
+        }
+        JsonArray a = new JsonArray();
+        a.add(v.x);
+        a.add(v.y);
+        a.add(v.z);
+        o.add(key, a);
     }
 
     /** 按 {@code spec} 与她此刻的身体、端口组一份成本模型:估一格挖多久、许不许挖,与寻路用的是同一份定价。 */

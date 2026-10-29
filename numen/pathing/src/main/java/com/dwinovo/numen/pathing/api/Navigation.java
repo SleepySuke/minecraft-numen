@@ -1,5 +1,6 @@
 package com.dwinovo.numen.pathing.api;
 
+import com.dwinovo.numen.pathing.drive.Blockage;
 import com.dwinovo.numen.pathing.drive.Driver;
 import com.dwinovo.numen.pathing.drive.EditLedger;
 import com.dwinovo.numen.pathing.drive.Halt;
@@ -8,6 +9,7 @@ import com.dwinovo.numen.pathing.search.Goal;
 import com.dwinovo.numen.pathing.search.Pending;
 import com.dwinovo.numen.pathing.search.Searches;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
 
 /**
@@ -57,6 +59,7 @@ public final class Navigation {
                 diagnosis = null;
                 status = NavStatus.failed(outcome);
                 log("结局", " 诊断 " + PathLog.ms(spent));
+                traceGiveUp(outcome);
             }
             return;
         }
@@ -67,8 +70,29 @@ public final class Navigation {
                 status = NavStatus.ARRIVED;
                 log("结局", "");
             }
-            case HALTED -> conclude(driver.halt());
+            case HALTED -> {
+                conclude(driver.halt());
+                if (!status.running()) {
+                    traceGiveUp(status.outcome());
+                }
+            }
         }
+    }
+
+    /**
+     * 这一趟怎么收的场,报一条给宿主的轨迹。收场只在这里报:全流程里唯一拿到
+     * {@link Outcome} 的就是门面,驱动那一侧只有"搜不出来了",说不出诊断出的是哪一类。
+     */
+    private void traceGiveUp(Outcome outcome) {
+        Blockage cause = switch (outcome) {
+            case Outcome.Blocked blocked -> blocked.blockage();
+            case Outcome.NoRoute noRoute -> noRoute.cause();
+            default -> null;
+        };
+        driver.trace(Trace.PathEvent.giveUp(entity.position(), null,
+                cause == null ? null : cause.cell(),
+                cause == null || cause.reason() == null ? null : cause.reason().name(),
+                outcome.getClass().getSimpleName()));
     }
 
     private void conclude(Halt halt) {

@@ -3,6 +3,8 @@ package com.dwinovo.numen.pathing.drive;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.dwinovo.numen.pathing.api.Trace;
+import com.dwinovo.numen.pathing.api.Trace.PathEvent;
 import com.dwinovo.numen.pathing.body.Body;
 import com.dwinovo.numen.api.entity.BodyAction;
 import com.dwinovo.numen.api.entity.Controls.Key;
@@ -128,9 +130,9 @@ public final class Driver {
      * @param seed    先照这条路走(调用方给的);没有为 null。它只是第一段,走不下去照样按目标与规格重搜
      * @param passing 路过这个目标:走进去就算到了,不停稳
      */
-    public Driver(Body body, TerrainPolicy terrain, Materials materials, Threats threats, Goal goal,
+    public Driver(Body body, TerrainPolicy terrain, Materials materials, Threats threats, Trace trace, Goal goal,
                   RouteSpec spec, int budget, Route seed, boolean passing) {
-        this.rig = new Rig(body, terrain, materials, threats);
+        this.rig = new Rig(body, terrain, materials, threats, trace);
         this.goal = goal;
         this.spec = spec;
         this.allowance = new Allowance(budget);
@@ -718,6 +720,7 @@ public final class Driver {
     private void replan(String why) {
         rig.journal.replanned();
         PathLog.info("{} 重搜:{} 身体 {}", rig.who, why, PathLog.at(rig.entity.position()));
+        trace(PathEvent.replan(rig.entity.position(), null, null, why));
         reset();
     }
 
@@ -748,6 +751,8 @@ public final class Driver {
         memory.block(m.kind(), m.from(), m.to());
         lastBlockage = blockage;
         rig.journal.blocked();
+        trace(PathEvent.blocked(Vec3.atCenterOf(m.from()), Vec3.atCenterOf(m.to()), blockage.cell(),
+                blockage.reason() == null ? null : blockage.reason().name(), null, m.kind().name()));
         PathLog.info("{} 走不下去 {} 这一步 {} -> 记为不通,从脚下重搜这一段 {}", rig.who, PathLog.blockage(blockage),
                 PathLog.step(m), PathLog.body(rig.entity));
         reset();
@@ -760,6 +765,14 @@ public final class Driver {
         rig.keys.release(Key.JUMP);
         rig.keys.release(Key.LEFT);
         rig.keys.release(Key.RIGHT);
+    }
+
+    /**
+     * 把这一条交给宿主的轨迹;没人听就不做事({@link Trace#NONE})。
+     * 门面在诊断出结论时也走这里——那是全流程里唯一拿到 {@link com.dwinovo.numen.pathing.api.Outcome} 的地方。
+     */
+    public void trace(Trace.PathEvent event) {
+        rig.trace.path(event);
     }
 
     private void halt(Halt why) {
